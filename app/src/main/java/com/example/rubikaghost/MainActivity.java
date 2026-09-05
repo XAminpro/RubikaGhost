@@ -11,7 +11,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        
+
         Switch switchView = new Switch(this);
         switchView.setText("حالت روح فعال باشد");
         switchView.setPadding(50, 100, 50, 0);
@@ -21,7 +21,7 @@ public class MainActivity extends AppCompatActivity {
         switchView.setChecked(pref.getBoolean("ghost_mode_toggle", true));
 
         switchView.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            pref.edit().putBoolean("ghost_mode_toggle", isChecked).apply();
+            pref.edit().putBoolean("ghost_mode_toggle", isChecked).commit();
         });
     }
 }
