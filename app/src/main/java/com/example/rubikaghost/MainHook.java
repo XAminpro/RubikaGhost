@@ -4,6 +4,7 @@ import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
+import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
 import java.lang.reflect.Method;
@@ -11,6 +12,7 @@ import java.lang.reflect.Method;
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "RubikaGhostLog";
+    private static XSharedPreferences prefs;
 
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
@@ -20,48 +22,83 @@ public class MainHook implements IXposedHookLoadPackage {
             return;
         }
 
-        XposedBridge.log(TAG + ": Scanning process -> " + lpparam.packageName);
+        XposedBridge.log(TAG + ": Hooking Obfuscated Rubika -> " + lpparam.packageName);
 
-        // ۱. هوک کردن مستقیم متد markAsRead در کلاس‌های عمومی UI
-        try {
-            XposedHelpers.findAndHookMethod(
-                "org.telegram.messenger.MessagesController",
-                lpparam.classLoader,
-                "markDialogAsRead",
-                long.class, int.class, int.class, int.class, boolean.class, int.class, boolean.class, int.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        XposedBridge.log(TAG + ": BLOCKED markDialogAsRead via MessagesController");
-                        param.setResult(null);
-                    }
+        // ۱. اسکن عمیق کلاس‌های بارگذاری‌شده برای یافتن متدهای حاوی markAsRead یا updateStatus
+        XposedBridge.hookAllConstructors(Throwable.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                // جهت جلوگیری از کرش احتمالی
+            }
+        });
+
+        // ۲. هوک کردن تمامی متدهایی که ورودی آن‌ها پیام‌ها یا شناسه گفتگوی سین شده است
+        ClassLoader classLoader = lpparam.classLoader;
+
+        // اسکن پکیج‌های شبکه و رابط کاربری روبیکا
+        String[] possibleControllerNames = {
+            "org.telegram.messenger.MessagesController",
+            "org.rbmain.messenger.MessagesController",
+            "app.rbmain.a.MessagesController"
+        };
+
+        for (String className : possibleControllerNames) {
+            try {
+                Class<?> clazz = XposedHelpers.findClassIfExists(className, classLoader);
+                if (clazz != null) {
+                    XposedBridge.log(TAG + ": Found Target Controller -> " + className);
+                    hookControllerMethods(clazz);
                 }
-            );
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Standard MessagesController not found, trying fallback...");
+            } catch (Throwable ignored) {}
         }
 
-        // ۲. هوک کردن سازنده تمام کلاس‌های مربوط به درخواست‌های TLObject
+        // ۳. هوک کردن لایه کلی ارسال متد در سرور (Fallback کلی)
         try {
-            Class<?> tlObjectClazz = XposedHelpers.findClassIfExists("org.telegram.tgnet.TLObject", lpparam.classLoader);
-            if (tlObjectClazz == null) {
-                tlObjectClazz = XposedHelpers.findClassIfExists("org.rbmain.tgnet.TLObject", lpparam.classLoader);
+            Class<?> httpOrSocketClass = XposedHelpers.findClassIfExists("org.telegram.tgnet.TLObject", classLoader);
+            if (httpOrSocketClass == null) {
+                httpOrSocketClass = XposedHelpers.findClassIfExists("org.rbmain.tgnet.TLObject", classLoader);
             }
 
-            if (tlObjectClazz != null) {
-                XposedBridge.hookAllConstructors(tlObjectClazz, new XC_MethodHook() {
+            if (httpOrSocketClass != null) {
+                XposedBridge.hookAllConstructors(httpOrSocketClass, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        String className = param.thisObject.getClass().getName();
-                        if (className.toLowerCase().contains("readhistory") || 
-                            className.toLowerCase().contains("updatestatus")) {
-                            XposedBridge.log(TAG + ": Detected Object Creation -> " + className);
+                        if (!isGhostModeEnabled()) return;
+
+                        String objName = param.thisObject.getClass().getName();
+                        if (objName.contains("readHistory") || objName.contains("updateStatus") || objName.contains("ReadHistory")) {
+                            XposedBridge.log(TAG + ": Successfully Intercepted Network Payload -> " + objName);
                         }
                     }
                 });
             }
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Error tracing TLObject: " + t.getMessage());
+            XposedBridge.log(TAG + ": Error in Fallback Hook: " + t.getMessage());
         }
+    }
+
+    private void hookControllerMethods(Class<?> clazz) {
+        for (Method method : clazz.getDeclaredMethods()) {
+            String name = method.getName().toLowerCase();
+            if (name.contains("markdialogasread") || name.contains("markasread") || name.contains("updatestatus")) {
+                XposedBridge.hookMethod(method, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (isGhostModeEnabled()) {
+                            XposedBridge.log(TAG + ": [BLOCKED] Executing " + method.getName());
+                            param.setResult(null); // مانع از اجرای تابع اصلی
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    private boolean isGhostModeEnabled() {
+        if (prefs == null) {
+            prefs = new XSharedPreferences("com.example.rubikaghost", "ghost_settings");
+        }
+        prefs.reload();
+        return prefs.getBoolean("ghost_mode_toggle", true);
     }
 }
