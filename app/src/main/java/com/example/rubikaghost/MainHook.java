@@ -7,20 +7,15 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
+import org.json.JSONObject;
+
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.util.Collections;
-import java.util.Set;
-import java.util.WeakHashMap;
 
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "RubikaGhostLog";
     private static final String MODULE_PKG = "com.example.rubikaghost";
-
-    // جلوگیری از هوک کردن دوباره‌ی همون متد
-    private final Set<Method> hookedMethods =
-            Collections.newSetFromMap(new WeakHashMap<>());
+    private static final String TARGET_CLASS = "androidMessenger.network.NetworkImpl";
 
     private XSharedPreferences prefs;
 
@@ -37,84 +32,53 @@ public class MainHook implements IXposedHookLoadPackage {
         prefs = new XSharedPreferences(MODULE_PKG, "ghost_settings");
         prefs.makeWorldReadable();
 
-        XposedHelpers.findAndHookMethod(
-            "java.lang.ClassLoader",
-            lpparam.classLoader,
-            "loadClass",
-            String.class,
-            boolean.class,
-            new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    Class<?> clazz = (Class<?>) param.getResult();
-                    if (clazz == null) return;
+        try {
+            Class<?> networkImplClass = XposedHelpers.findClass(TARGET_CLASS, lpparam.classLoader);
 
-                    String className = clazz.getName();
-                    // فقط کلاس‌های خود اپ روبیکا رو اسکن کن، نه android/kotlin/کتابخونه‌ها
-                    if (className.startsWith("android.") ||
-                        className.startsWith("androidx.") ||
-                        className.startsWith("java.") ||
-                        className.startsWith("kotlin.") ||
-                        className.startsWith("com.google.")) {
-                        return;
-                    }
-
-                    Method[] methods;
-                    try {
-                        methods = clazz.getDeclaredMethods();
-                    } catch (Throwable t) {
-                        return; // بعضی کلاس‌ها موقع reflection ارور می‌دن
-                    }
-
-                    for (Method method : methods) {
-                        if (!method.getName().equals("sendRequest") ||
-                            !Modifier.isPublic(method.getModifiers())) {
-                            continue;
-                        }
-                        if (!hookedMethods.add(method)) continue; // قبلاً هوک شده
-
-                        XposedBridge.log(TAG + ": FOUND sendRequest -> " + clazz.getName()
-                                + " returns " + method.getReturnType());
-
-                        XposedBridge.hookMethod(method, new XC_MethodHook() {
-                            @Override
-                            protected void beforeHookedMethod(MethodHookParam p) throws Throwable {
-                                if (prefs != null) {
-                                    prefs.reload();
-                                    if (!prefs.getBoolean("ghost_mode_toggle", true)) {
-                                        return; // کاربر حالت روح رو خاموش کرده
-                                    }
-                                }
-
-                                if (p.args == null || p.args.length == 0 || p.args[0] == null) return;
-
-                                String requestClass = p.args[0].getClass().getName().toLowerCase();
-                                if (requestClass.contains("read") ||
-                                    requestClass.contains("status") ||
-                                    requestClass.contains("seen")) {
-
-                                    XposedBridge.log(TAG + ": >>> BLOCKED -> " + requestClass);
-
-                                    Class<?> returnType = method.getReturnType();
-                                    if (returnType == void.class) {
-                                        p.setResult(null);
-                                    } else if (returnType == int.class) {
-                                        p.setResult(0);
-                                    } else if (returnType == boolean.class) {
-                                        p.setResult(false);
-                                    } else if (returnType == long.class) {
-                                        p.setResult(0L);
-                                    } else if (returnType.isPrimitive()) {
-                                        p.setResult(0);
-                                    } else {
-                                        p.setResult(null); // هر نوع آبجکتی
-                                    }
-                                }
-                            }
-                        });
+            for (Method method : networkImplClass.getDeclaredMethods()) {
+                Class<?>[] paramTypes = method.getParameterTypes();
+                int jsonIndex = -1;
+                for (int i = 0; i < paramTypes.length; i++) {
+                    if (paramTypes[i] == JSONObject.class) {
+                        jsonIndex = i;
+                        break;
                     }
                 }
+                // متد باید یه JSONObject بگیره و دقیقاً قبلش یه String باشه (اسم متد API)
+                if (jsonIndex <= 0 || paramTypes[jsonIndex - 1] != String.class) continue;
+
+                final int methodNameIndex = jsonIndex - 1;
+
+                XposedBridge.hookMethod(method, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.args == null || param.args.length <= methodNameIndex) return;
+                        Object arg = param.args[methodNameIndex];
+                        if (!(arg instanceof String)) return;
+
+                        String apiMethod = ((String) arg).toLowerCase();
+                        if (!apiMethod.contains("seen") &&
+                            !apiMethod.contains("read") &&
+                            !apiMethod.contains("status")) {
+                            return;
+                        }
+
+                        if (prefs != null) {
+                            prefs.reload();
+                            if (!prefs.getBoolean("ghost_mode_toggle", true)) {
+                                return; // کاربر حالت روح رو خاموش کرده
+                            }
+                        }
+
+                        XposedBridge.log(TAG + ": >>> BLOCKED -> " + arg);
+                        param.setResult(0); // همه‌ی این متدها int برمی‌گردونن، پس امنه
+                    }
+                });
+
+                XposedBridge.log(TAG + ": Hooked -> " + method.getName() + " (arity " + paramTypes.length + ")");
             }
-        );
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": Hook setup error: " + t);
+        }
     }
 }
