@@ -22,71 +22,69 @@ public class MainHook implements IXposedHookLoadPackage {
             return;
         }
 
-        XposedBridge.log(TAG + ": Hooking Obfuscated Rubika -> " + lpparam.packageName);
+        XposedBridge.log(TAG + ": Deep scanning process -> " + lpparam.packageName);
 
-        // ۱. اسکن عمیق کلاس‌های بارگذاری‌شده برای یافتن متدهای حاوی markAsRead یا updateStatus
-        XposedBridge.hookAllConstructors(Throwable.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                // جهت جلوگیری از کرش احتمالی
-            }
-        });
-
-        // ۲. هوک کردن تمامی متدهایی که ورودی آن‌ها پیام‌ها یا شناسه گفتگوی سین شده است
-        ClassLoader classLoader = lpparam.classLoader;
-
-        // اسکن پکیج‌های شبکه و رابط کاربری روبیکا
-        String[] possibleControllerNames = {
-            "org.telegram.messenger.MessagesController",
-            "org.rbmain.messenger.MessagesController",
-            "app.rbmain.a.MessagesController"
-        };
-
-        for (String className : possibleControllerNames) {
-            try {
-                Class<?> clazz = XposedHelpers.findClassIfExists(className, classLoader);
-                if (clazz != null) {
-                    XposedBridge.log(TAG + ": Found Target Controller -> " + className);
-                    hookControllerMethods(clazz);
-                }
-            } catch (Throwable ignored) {}
-        }
-
-        // ۳. هوک کردن لایه کلی ارسال متد در سرور (Fallback کلی)
+        // ۱. هوک کردن تمام متدهای sendRequest بدون وابستگی به نام پکیج
         try {
-            Class<?> httpOrSocketClass = XposedHelpers.findClassIfExists("org.telegram.tgnet.TLObject", classLoader);
-            if (httpOrSocketClass == null) {
-                httpOrSocketClass = XposedHelpers.findClassIfExists("org.rbmain.tgnet.TLObject", classLoader);
-            }
-
-            if (httpOrSocketClass != null) {
-                XposedBridge.hookAllConstructors(httpOrSocketClass, new XC_MethodHook() {
+            XposedHelpers.findAndHookMethod(
+                ClassLoader.class,
+                "loadClass",
+                String.class,
+                boolean.class,
+                new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        Class<?> clazz = (Class<?>) param.getResult();
+                        if (clazz == null) return;
+
+                        String className = clazz.getName();
+                        
+                        // بررسی کلاس‌های هدف لایه شبکه و کنترلر
+                        if (className.endsWith("ConnectionsManager") || className.endsWith("MessagesController")) {
+                            XposedBridge.log(TAG + ": Dynamically intercepted class -> " + className);
+                            hookTargetMethods(clazz);
+                        }
+                    }
+                }
+            );
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": Error in Dynamic Scanner: " + t.getMessage());
+        }
+    }
+
+    private static void hookTargetMethods(Class<?> clazz) {
+        for (Method method : clazz.getDeclaredMethods()) {
+            String methodName = method.getName();
+
+            // هوک کردن تابع ارسال درخواست شبکه (sendRequest)
+            if (methodName.equals("sendRequest")) {
+                XposedBridge.hookMethod(method, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                         if (!isGhostModeEnabled()) return;
 
-                        String objName = param.thisObject.getClass().getName();
-                        if (objName.contains("readHistory") || objName.contains("updateStatus") || objName.contains("ReadHistory")) {
-                            XposedBridge.log(TAG + ": Successfully Intercepted Network Payload -> " + objName);
+                        if (param.args != null && param.args.length > 0 && param.args[0] != null) {
+                            String reqPayload = param.args[0].getClass().getName();
+                            
+                            if (reqPayload.toLowerCase().contains("readhistory") || 
+                                reqPayload.toLowerCase().contains("updatestatus")) {
+                                
+                                XposedBridge.log(TAG + ": [SUCCESS] Blocked payload -> " + reqPayload);
+                                param.setResult(0); // خنثی کردن ارسال به سرور
+                            }
                         }
                     }
                 });
             }
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Error in Fallback Hook: " + t.getMessage());
-        }
-    }
 
-    private void hookControllerMethods(Class<?> clazz) {
-        for (Method method : clazz.getDeclaredMethods()) {
-            String name = method.getName().toLowerCase();
-            if (name.contains("markdialogasread") || name.contains("markasread") || name.contains("updatestatus")) {
+            // هوک کردن تابع علامت‌گذاری پیام‌ها به عنوان خوانده‌شده (markDialogAsRead)
+            if (methodName.toLowerCase().contains("markdialogasread") || methodName.toLowerCase().contains("markasread")) {
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                         if (isGhostModeEnabled()) {
-                            XposedBridge.log(TAG + ": [BLOCKED] Executing " + method.getName());
-                            param.setResult(null); // مانع از اجرای تابع اصلی
+                            XposedBridge.log(TAG + ": [SUCCESS] Blocked local read action -> " + methodName);
+                            param.setResult(null);
                         }
                     }
                 });
@@ -94,7 +92,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    private boolean isGhostModeEnabled() {
+    private static boolean isGhostModeEnabled() {
         if (prefs == null) {
             prefs = new XSharedPreferences("com.example.rubikaghost", "ghost_settings");
         }
