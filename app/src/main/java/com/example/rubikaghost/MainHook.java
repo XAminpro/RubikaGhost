@@ -1,73 +1,85 @@
 package com.example.rubikaghost;
 
-import android.util.Log;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
+import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
+
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "RubikaGhostLog";
+    private static XSharedPreferences prefs;
 
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
-        // ۱. بررسی نام پکیج روبیکا
+        // ۱. بررسی دقیق پکیج روبیکا مطابق لاگ گوشی شما
         if (!lpparam.packageName.contains("rbmain") && 
             !lpparam.packageName.equals("ir.resaneh1.iptv") && 
             !lpparam.packageName.contains("rubika")) {
             return;
         }
 
-        XposedBridge.log(TAG + ": Rubika process hooked -> " + lpparam.packageName);
+        XposedBridge.log(TAG + ": Successfully loaded in process -> " + lpparam.packageName);
 
-        // ۲. هوک کلی متدهای لایه شبکه (TLRPC) که مسئول ارسال درخواست سین و وضعیت آنلاین به سرور هستند
-        try {
-            Class<?> tgnetClass = XposedHelpers.findClassIfExists("org.telegram.tgnet.ConnectionsManager", lpparam.classLoader);
-            if (tgnetClass == null) {
-                tgnetClass = XposedHelpers.findClassIfExists("org.rbmain.tgnet.ConnectionsManager", lpparam.classLoader);
+        // ۲. پیدا کردن کلاس شبکه به روش تعمیم‌یافته (Dynamic Finding)
+        String[] possibleClasses = {
+            "org.telegram.tgnet.ConnectionsManager",
+            "org.rbmain.tgnet.ConnectionsManager",
+            "ir.resaneh1.iptv.tgnet.ConnectionsManager"
+        };
+
+        Class<?> connectionsManagerClass = null;
+        for (String className : possibleClasses) {
+            connectionsManagerClass = XposedHelpers.findClassIfExists(className, lpparam.classLoader);
+            if (connectionsManagerClass != null) {
+                XposedBridge.log(TAG + ": Found ConnectionsManager class -> " + className);
+                break;
             }
+        }
 
-            if (tgnetClass != null) {
-                XposedBridge.log(TAG + ": ConnectionsManager found!");
-
-                // هوک کردن تابع ارسال درخواست به سرور (sendRequest)
-                XposedHelpers.findAndHookMethod(
-                    tgnetClass,
-                    "sendRequest",
-                    XposedHelpers.findClassIfExists("org.telegram.tgnet.TLObject", lpparam.classLoader) != null ?
-                        XposedHelpers.findClass("org.telegram.tgnet.TLObject", lpparam.classLoader) :
-                        XposedHelpers.findClass("org.rbmain.tgnet.TLObject", lpparam.classLoader),
-                    XposedHelpers.findClassIfExists("org.telegram.tgnet.RequestDelegate", lpparam.classLoader) != null ?
-                        XposedHelpers.findClass("org.telegram.tgnet.RequestDelegate", lpparam.classLoader) :
-                        XposedHelpers.findClass("org.rbmain.tgnet.RequestDelegate", lpparam.classLoader),
-                    int.class,
-                    new XC_MethodHook() {
+        if (connectionsManagerClass != null) {
+            // هوک کردن تمام متدهای sendRequest موجود در کلاس
+            for (Method method : connectionsManagerClass.getDeclaredMethods()) {
+                if (method.getName().equals("sendRequest")) {
+                    XposedBridge.hookMethod(method, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            Object object = param.args[0];
-                            if (object == null) return;
+                            if (!isGhostModeEnabled()) {
+                                return; // اگر حالت روح خاموش باشد، اجازه ارسال عادی داده می‌شود
+                            }
 
-                            String requestName = object.getClass().getName();
-                            
-                            // بررسی درخواست‌های مربوط به سین زدن (Read History) یا آنلاین بودن (Status)
-                            if (requestName.contains("messages_readHistory") || 
-                                requestName.contains("messages_receivedQueue") || 
-                                requestName.contains("account_updateStatus")) {
-                                
-                                XposedBridge.log(TAG + ": Blocked network request -> " + requestName);
-                                // جلو گیری از ارسال درخواست سین به سرور روبیکا
-                                param.setResult(0);
+                            if (param.args != null && param.args.length > 0 && param.args[0] != null) {
+                                Object requestObj = param.args[0];
+                                String reqName = requestObj.getClass().getName();
+
+                                // مسدودسازی درخواست‌های خوانده شدن پیام (Read History) و وضعیت آنلاین بودن (Status)
+                                if (reqName.toLowerCase().contains("readhistory") || 
+                                    reqName.toLowerCase().contains("updatestatus") ||
+                                    reqName.toLowerCase().contains("receivedqueue")) {
+                                    
+                                    XposedBridge.log(TAG + ": [GHOST MODE ACTIVE] Successfully BLOCKED -> " + reqName);
+                                    param.setResult(0); // خنثی‌سازی ارسال به سرور
+                                }
                             }
                         }
-                    }
-                );
-            } else {
-                XposedBridge.log(TAG + ": ConnectionsManager NOT found!");
+                    });
+                }
             }
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Error hooking network layer: " + t.getMessage());
+        } else {
+            XposedBridge.log(TAG + ": Could not locate ConnectionsManager dynamically.");
         }
+    }
+
+    private boolean isGhostModeEnabled() {
+        if (prefs == null) {
+            prefs = new XSharedPreferences("com.example.rubikaghost", "ghost_settings");
+        }
+        prefs.reload();
+        return prefs.getBoolean("ghost_mode_toggle", true);
     }
 }
