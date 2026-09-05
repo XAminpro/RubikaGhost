@@ -1,12 +1,12 @@
 package com.example.rubikaghost;
 
-import de.robv.android.xposed.IXposedWithInitPackageLoad;
+import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
-public class MainHook implements IXposedWithInitPackageLoad {
+public class MainHook implements IXposedHookLoadPackage {
 
     private static XSharedPreferences prefs;
 
