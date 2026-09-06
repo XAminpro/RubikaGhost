@@ -29,12 +29,23 @@ public class MainHook implements IXposedHookLoadPackage {
 
         XposedBridge.log(TAG + ": Active -> " + lpparam.packageName);
 
-        prefs = new XSharedPreferences(MODULE_PKG, "ghost_settings");
-        prefs.makeWorldReadable();
-
+        // مرحله ۱: راه‌اندازی preferences — جدا از هوک اصلی، هر خطایی اینجا نباید کل هوک رو خراب کنه
         try {
-            Class<?> networkImplClass = XposedHelpers.findClass(TARGET_CLASS, lpparam.classLoader);
+            prefs = new XSharedPreferences(MODULE_PKG, "ghost_settings");
+            prefs.makeWorldReadable();
+            XposedBridge.log(TAG + ": Prefs ready, exists=" + prefs.getFile().exists());
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": Prefs setup FAILED (continuing anyway): " + t);
+            prefs = null;
+        }
 
+        // مرحله ۲: پیدا کردن و هوک کردن کلاس شبکه
+        try {
+            XposedBridge.log(TAG + ": Looking for " + TARGET_CLASS);
+            Class<?> networkImplClass = XposedHelpers.findClass(TARGET_CLASS, lpparam.classLoader);
+            XposedBridge.log(TAG + ": Class found, scanning methods...");
+
+            int hookedCount = 0;
             for (Method method : networkImplClass.getDeclaredMethods()) {
                 Class<?>[] paramTypes = method.getParameterTypes();
                 int jsonIndex = -1;
@@ -44,7 +55,6 @@ public class MainHook implements IXposedHookLoadPackage {
                         break;
                     }
                 }
-                // متد باید یه JSONObject بگیره و دقیقاً قبلش یه String باشه (اسم متد API)
                 if (jsonIndex <= 0 || paramTypes[jsonIndex - 1] != String.class) continue;
 
                 final int methodNameIndex = jsonIndex - 1;
@@ -63,22 +73,27 @@ public class MainHook implements IXposedHookLoadPackage {
                             return;
                         }
 
+                        boolean ghostOn = true;
                         if (prefs != null) {
-                            prefs.reload();
-                            if (!prefs.getBoolean("ghost_mode_toggle", true)) {
-                                return; // کاربر حالت روح رو خاموش کرده
+                            try {
+                                prefs.reload();
+                                ghostOn = prefs.getBoolean("ghost_mode_toggle", true);
+                            } catch (Throwable ignored) {
                             }
                         }
+                        if (!ghostOn) return;
 
                         XposedBridge.log(TAG + ": >>> BLOCKED -> " + arg);
-                        param.setResult(0); // همه‌ی این متدها int برمی‌گردونن، پس امنه
+                        param.setResult(0);
                     }
                 });
 
+                hookedCount++;
                 XposedBridge.log(TAG + ": Hooked -> " + method.getName() + " (arity " + paramTypes.length + ")");
             }
+            XposedBridge.log(TAG + ": Total hooked methods = " + hookedCount);
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Hook setup error: " + t);
+            XposedBridge.log(TAG + ": Hook setup FAILED: " + t);
         }
     }
 }
