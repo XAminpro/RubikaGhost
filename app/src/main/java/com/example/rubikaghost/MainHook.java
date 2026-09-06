@@ -19,6 +19,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "RubikaGhostLog";
     private static File logFile;
+    private static ClassLoader targetClassLoader;
 
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
@@ -29,22 +30,9 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         XposedBridge.log(TAG + ": Active -> " + lpparam.packageName);
-
-        try {
-            // به‌جای AndroidAppHelper (که تو این نسخه‌ی api جار نیست)،
-            // مستقیم از android.app.ActivityThread.currentApplication() با reflection استفاده می‌کنیم
-            Class<?> activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", lpparam.classLoader);
-            Context ctx = (Context) XposedHelpers.callStaticMethod(activityThreadClass, "currentApplication");
-
-            File dir = ctx.getExternalFilesDir(null);
-            if (dir == null) dir = ctx.getFilesDir();
-            logFile = new File(dir, "rubikaghost_log.txt");
-            writeLog("===== SESSION START =====");
-            writeLog("Log file path: " + logFile.getAbsolutePath());
-            XposedBridge.log(TAG + ": Writing logs to -> " + logFile.getAbsolutePath());
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Could not set up log file: " + t);
-        }
+        targetClassLoader = lpparam.classLoader;
+        // ⚠️ اینجا دیگه سعی نمی‌کنیم Context بگیریم — هنوز زوده، Application ساخته نشده.
+        // اولین باری که یه درخواست HTTP بیاد، اون موقع تلاش می‌کنیم (ensureLogFile).
 
         try {
             Class<?> requestBuilderClass = XposedHelpers.findClass("okhttp3.Request$Builder", lpparam.classLoader);
@@ -81,16 +69,38 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             });
 
-            writeLog("OkHttp Request.Builder.build() hooked successfully");
-            XposedBridge.log(TAG + ": OkHttp hook active, writing to file");
+            XposedBridge.log(TAG + ": OkHttp hook active");
         } catch (Throwable t) {
-            writeLog("Hook setup FAILED: " + t);
             XposedBridge.log(TAG + ": Hook setup FAILED: " + t);
         }
     }
 
+    /**
+     * تلاش برای پیدا کردن logFile، فقط وقتی واقعاً لازمش داریم (نه موقع handleLoadPackage).
+     * تا اون لحظه، Application حتماً ساخته شده و Context در دسترسه.
+     */
+    private static synchronized boolean ensureLogFile() {
+        if (logFile != null) return true;
+        try {
+            Class<?> activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", targetClassLoader);
+            Context ctx = (Context) XposedHelpers.callStaticMethod(activityThreadClass, "currentApplication");
+            if (ctx == null) {
+                XposedBridge.log(TAG + ": currentApplication() still null, will retry later");
+                return false;
+            }
+            File dir = ctx.getExternalFilesDir(null);
+            if (dir == null) dir = ctx.getFilesDir();
+            logFile = new File(dir, "rubikaghost_log.txt");
+            XposedBridge.log(TAG + ": Writing logs to -> " + logFile.getAbsolutePath());
+            return true;
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": ensureLogFile failed: " + t);
+            return false;
+        }
+    }
+
     private static synchronized void writeLog(String line) {
-        if (logFile == null) return;
+        if (!ensureLogFile()) return;
         try (PrintWriter pw = new PrintWriter(new FileWriter(logFile, true))) {
             String time = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(new Date());
             pw.println("[" + time + "] " + line);
