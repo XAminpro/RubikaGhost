@@ -17,6 +17,10 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String MODULE_PKG = "com.example.rubikaghost";
     private static final String TARGET_CLASS = "androidMessenger.network.NetworkImpl";
 
+    // âš ï¸ Ù†Ø³Ø®Ù‡â€ŒÛŒ ØªØ´Ø®ÛŒØµÛŒ: Ú†ÛŒØ²ÛŒ Ø±Ùˆ Ø¨Ù„Ø§Ú© Ù†Ù…ÛŒâ€ŒÚ©Ù†Ù‡ØŒ ÙÙ‚Ø· Ù‡Ù…Ù‡â€ŒÛŒ Ø§Ø³Ù… Ù…ØªØ¯Ù‡Ø§ÛŒ API Ø±Ùˆ Ù„Ø§Ú¯ Ù…ÛŒâ€ŒÚ©Ù†Ù‡
+    // ØªØ§ Ø¨ÙÙ‡Ù…ÛŒÙ… Ú©Ø¯ÙˆÙ…â€ŒØ´ÙˆÙ† Ù…Ø³Ø¦ÙˆÙ„ Ø§Ø¹Ù„Ø§Ù… Ø¢Ù†Ù„Ø§ÛŒÙ†/Ø¢ÙÙ„Ø§ÛŒÙ† Ø¨ÙˆØ¯Ù†Ù‡.
+    // Ø¨Ø¹Ø¯ Ø§Ø² Ø§ÛŒÙ†Ú©Ù‡ Ù„Ø§Ú¯ Ø±Ùˆ Ø¨Ø±Ø±Ø³ÛŒ Ú©Ø±Ø¯ÛŒÙ…ØŒ Ø¨Ø±Ù…ÛŒâ€ŒÚ¯Ø±Ø¯ÛŒÙ… Ø¨Ù‡ Ù†Ø³Ø®Ù‡â€ŒÛŒ Ø¨Ù„Ø§Ú©â€ŒÚ©Ù†Ù†Ø¯Ù‡.
+
     private XSharedPreferences prefs;
 
     @Override
@@ -29,24 +33,20 @@ public class MainHook implements IXposedHookLoadPackage {
 
         XposedBridge.log(TAG + ": Active -> " + lpparam.packageName);
 
-        // مرحله ۱: راه‌اندازی preferences — جدا از هوک اصلی، هر خطایی اینجا نباید کل هوک رو خراب کنه
         try {
             prefs = new XSharedPreferences(MODULE_PKG, "ghost_settings");
             prefs.makeWorldReadable();
-            XposedBridge.log(TAG + ": Prefs ready, exists=" + prefs.getFile().exists());
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Prefs setup FAILED (continuing anyway): " + t);
-            prefs = null;
+            XposedBridge.log(TAG + ": Prefs setup FAILED: " + t);
         }
 
-        // مرحله ۲: پیدا کردن و هوک کردن کلاس شبکه
         try {
-            XposedBridge.log(TAG + ": Looking for " + TARGET_CLASS);
             Class<?> networkImplClass = XposedHelpers.findClass(TARGET_CLASS, lpparam.classLoader);
-            XposedBridge.log(TAG + ": Class found, scanning methods...");
 
             int hookedCount = 0;
             for (Method method : networkImplClass.getDeclaredMethods()) {
+                if (method.getReturnType() != int.class) continue;
+
                 Class<?>[] paramTypes = method.getParameterTypes();
                 int jsonIndex = -1;
                 for (int i = 0; i < paramTypes.length; i++) {
@@ -58,6 +58,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (jsonIndex <= 0 || paramTypes[jsonIndex - 1] != String.class) continue;
 
                 final int methodNameIndex = jsonIndex - 1;
+                final int jsonArgIndex = jsonIndex;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
@@ -66,32 +67,24 @@ public class MainHook implements IXposedHookLoadPackage {
                         Object arg = param.args[methodNameIndex];
                         if (!(arg instanceof String)) return;
 
-                        String apiMethod = ((String) arg).toLowerCase();
-                        if (!apiMethod.contains("seen") &&
-                            !apiMethod.contains("read") &&
-                            !apiMethod.contains("status")) {
-                            return;
-                        }
-
-                        boolean ghostOn = true;
-                        if (prefs != null) {
-                            try {
-                                prefs.reload();
-                                ghostOn = prefs.getBoolean("ghost_mode_toggle", true);
-                            } catch (Throwable ignored) {
+                        // ÙÙ‚Ø· Ù„Ø§Ú¯ â€” Ù‡ÛŒÚ†ÛŒ Ø±Ùˆ Ø¨Ù„Ø§Ú© Ù†Ù…ÛŒâ€ŒÚ©Ù†ÛŒÙ… ØªÙˆ Ø§ÛŒÙ† Ù†Ø³Ø®Ù‡
+                        String jsonPreview = "";
+                        try {
+                            Object jsonArg = param.args[jsonArgIndex];
+                            if (jsonArg instanceof JSONObject) {
+                                String s = jsonArg.toString();
+                                jsonPreview = s.length() > 200 ? s.substring(0, 200) + "..." : s;
                             }
+                        } catch (Throwable ignored) {
                         }
-                        if (!ghostOn) return;
 
-                        XposedBridge.log(TAG + ": >>> BLOCKED -> " + arg);
-                        param.setResult(0);
+                        XposedBridge.log(TAG + ": API-CALL -> " + arg + " | data: " + jsonPreview);
                     }
                 });
 
                 hookedCount++;
-                XposedBridge.log(TAG + ": Hooked -> " + method.getName() + " (arity " + paramTypes.length + ")");
             }
-            XposedBridge.log(TAG + ": Total hooked methods = " + hookedCount);
+            XposedBridge.log(TAG + ": Diagnostic mode active, hooked " + hookedCount + " methods (log-only, nothing blocked)");
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": Hook setup FAILED: " + t);
         }
