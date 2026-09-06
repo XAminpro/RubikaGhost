@@ -18,4 +18,5 @@ android {
 dependencies {
     compileOnly("de.robv.android.xposed:api:82")
     implementation("androidx.appcompat:appcompat:1.6.1")
+    compileOnly("com.squareup.okhttp3:okhttp:4.12.0")
 }
