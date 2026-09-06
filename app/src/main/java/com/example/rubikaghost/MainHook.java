@@ -2,26 +2,23 @@ package com.example.rubikaghost;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
-import org.json.JSONObject;
-
 import java.lang.reflect.Method;
+
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okio.Buffer;
 
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "RubikaGhostLog";
-    private static final String MODULE_PKG = "com.example.rubikaghost";
-    private static final String TARGET_CLASS = "androidMessenger.network.NetworkImpl";
 
-    // âš ï¸ Ù†Ø³Ø®Ù‡â€ŒÛŒ ØªØ´Ø®ÛŒØµÛŒ: Ú†ÛŒØ²ÛŒ Ø±Ùˆ Ø¨Ù„Ø§Ú© Ù†Ù…ÛŒâ€ŒÚ©Ù†Ù‡ØŒ ÙÙ‚Ø· Ù‡Ù…Ù‡â€ŒÛŒ Ø§Ø³Ù… Ù…ØªØ¯Ù‡Ø§ÛŒ API Ø±Ùˆ Ù„Ø§Ú¯ Ù…ÛŒâ€ŒÚ©Ù†Ù‡
-    // ØªØ§ Ø¨ÙÙ‡Ù…ÛŒÙ… Ú©Ø¯ÙˆÙ…â€ŒØ´ÙˆÙ† Ù…Ø³Ø¦ÙˆÙ„ Ø§Ø¹Ù„Ø§Ù… Ø¢Ù†Ù„Ø§ÛŒÙ†/Ø¢ÙÙ„Ø§ÛŒÙ† Ø¨ÙˆØ¯Ù†Ù‡.
-    // Ø¨Ø¹Ø¯ Ø§Ø² Ø§ÛŒÙ†Ú©Ù‡ Ù„Ø§Ú¯ Ø±Ùˆ Ø¨Ø±Ø±Ø³ÛŒ Ú©Ø±Ø¯ÛŒÙ…ØŒ Ø¨Ø±Ù…ÛŒâ€ŒÚ¯Ø±Ø¯ÛŒÙ… Ø¨Ù‡ Ù†Ø³Ø®Ù‡â€ŒÛŒ Ø¨Ù„Ø§Ú©â€ŒÚ©Ù†Ù†Ø¯Ù‡.
-
-    private XSharedPreferences prefs;
+    // âš ï¸ Ù†Ø³Ø®Ù‡â€ŒÛŒ ØªØ´Ø®ÛŒØµÛŒ Ù†Ù‡Ø§ÛŒÛŒ: Ø²ÛŒØ± Ù„Ø§ÛŒÙ‡â€ŒÛŒ JSON Ù…ÛŒØ±Ù‡ØŒ Ù…Ø³ØªÙ‚ÛŒÙ… Ø±Ùˆ Ø®ÙˆØ¯Ù okhttp
+    // Ù‡Ø± Ø¯Ø±Ø®ÙˆØ§Ø³Øª HTTP Ø®Ø§Ù…ÛŒ Ú©Ù‡ Ø§Ø² Ø§Ù¾ Ø®Ø§Ø±Ø¬ Ù…ÛŒØ´Ù‡ Ø±Ùˆ Ù„Ø§Ú¯ Ù…ÛŒâ€ŒÚ©Ù†Ù‡ (URL Ú©Ø§Ù…Ù„ + Ù…ØªØ¯ + Ø¨Ø¯Ù†Ù‡)
+    // Ø¨Ø¯ÙˆÙ† ØªÙˆØ¬Ù‡ Ø¨Ù‡ Ø§ÛŒÙ†Ú©Ù‡ Ø§Ø² Ú©Ø¯ÙˆÙ… Ú©Ù„Ø§Ø³ Ø¬Ø§ÙˆØ§ Ø§ÙˆÙ…Ø¯Ù‡.
 
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
@@ -34,57 +31,39 @@ public class MainHook implements IXposedHookLoadPackage {
         XposedBridge.log(TAG + ": Active -> " + lpparam.packageName);
 
         try {
-            prefs = new XSharedPreferences(MODULE_PKG, "ghost_settings");
-            prefs.makeWorldReadable();
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Prefs setup FAILED: " + t);
-        }
+            Class<?> requestBuilderClass = XposedHelpers.findClass("okhttp3.Request$Builder", lpparam.classLoader);
 
-        try {
-            Class<?> networkImplClass = XposedHelpers.findClass(TARGET_CLASS, lpparam.classLoader);
+            XposedHelpers.findAndHookMethod(requestBuilderClass, "build", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    try {
+                        Request request = (Request) param.getResult();
+                        if (request == null) return;
 
-            int hookedCount = 0;
-            for (Method method : networkImplClass.getDeclaredMethods()) {
-                if (method.getReturnType() != int.class) continue;
+                        String url = request.url().toString();
+                        String method = request.method();
 
-                Class<?>[] paramTypes = method.getParameterTypes();
-                int jsonIndex = -1;
-                for (int i = 0; i < paramTypes.length; i++) {
-                    if (paramTypes[i] == JSONObject.class) {
-                        jsonIndex = i;
-                        break;
-                    }
-                }
-                if (jsonIndex <= 0 || paramTypes[jsonIndex - 1] != String.class) continue;
-
-                final int methodNameIndex = jsonIndex - 1;
-                final int jsonArgIndex = jsonIndex;
-
-                XposedBridge.hookMethod(method, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        if (param.args == null || param.args.length <= methodNameIndex) return;
-                        Object arg = param.args[methodNameIndex];
-                        if (!(arg instanceof String)) return;
-
-                        // ÙÙ‚Ø· Ù„Ø§Ú¯ â€” Ù‡ÛŒÚ†ÛŒ Ø±Ùˆ Ø¨Ù„Ø§Ú© Ù†Ù…ÛŒâ€ŒÚ©Ù†ÛŒÙ… ØªÙˆ Ø§ÛŒÙ† Ù†Ø³Ø®Ù‡
-                        String jsonPreview = "";
-                        try {
-                            Object jsonArg = param.args[jsonArgIndex];
-                            if (jsonArg instanceof JSONObject) {
-                                String s = jsonArg.toString();
-                                jsonPreview = s.length() > 200 ? s.substring(0, 200) + "..." : s;
+                        String bodyPreview = "(no body)";
+                        RequestBody body = request.body();
+                        if (body != null) {
+                            try {
+                                Buffer buffer = new Buffer();
+                                body.writeTo(buffer);
+                                String full = buffer.readUtf8();
+                                bodyPreview = full.length() > 300 ? full.substring(0, 300) + "...(truncated)" : full;
+                            } catch (Throwable t) {
+                                bodyPreview = "(could not read body: " + t + ")";
                             }
-                        } catch (Throwable ignored) {
                         }
 
-                        XposedBridge.log(TAG + ": API-CALL -> " + arg + " | data: " + jsonPreview);
+                        XposedBridge.log(TAG + ": HTTP " + method + " " + url + " | body: " + bodyPreview);
+                    } catch (Throwable t) {
+                        XposedBridge.log(TAG + ": logging error: " + t);
                     }
-                });
+                }
+            });
 
-                hookedCount++;
-            }
-            XposedBridge.log(TAG + ": Diagnostic mode active, hooked " + hookedCount + " methods (log-only, nothing blocked)");
+            XposedBridge.log(TAG + ": OkHttp Request.Builder.build() hooked successfully");
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": Hook setup FAILED: " + t);
         }
