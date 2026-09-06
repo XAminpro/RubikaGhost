@@ -6,19 +6,12 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
-import java.lang.reflect.Method;
-
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okio.Buffer;
-
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "RubikaGhostLog";
 
-    // âš ï¸ Ù†Ø³Ø®Ù‡â€ŒÛŒ ØªØ´Ø®ÛŒØµÛŒ Ù†Ù‡Ø§ÛŒÛŒ: Ø²ÛŒØ± Ù„Ø§ÛŒÙ‡â€ŒÛŒ JSON Ù…ÛŒØ±Ù‡ØŒ Ù…Ø³ØªÙ‚ÛŒÙ… Ø±Ùˆ Ø®ÙˆØ¯Ù okhttp
-    // Ù‡Ø± Ø¯Ø±Ø®ÙˆØ§Ø³Øª HTTP Ø®Ø§Ù…ÛŒ Ú©Ù‡ Ø§Ø² Ø§Ù¾ Ø®Ø§Ø±Ø¬ Ù…ÛŒØ´Ù‡ Ø±Ùˆ Ù„Ø§Ú¯ Ù…ÛŒâ€ŒÚ©Ù†Ù‡ (URL Ú©Ø§Ù…Ù„ + Ù…ØªØ¯ + Ø¨Ø¯Ù†Ù‡)
-    // Ø¨Ø¯ÙˆÙ† ØªÙˆØ¬Ù‡ Ø¨Ù‡ Ø§ÛŒÙ†Ú©Ù‡ Ø§Ø² Ú©Ø¯ÙˆÙ… Ú©Ù„Ø§Ø³ Ø¬Ø§ÙˆØ§ Ø§ÙˆÙ…Ø¯Ù‡.
+    // Ù†Ø³Ø®Ù‡â€ŒÛŒ ØªØ´Ø®ÛŒØµÛŒ: Ø²ÛŒØ± Ù„Ø§ÛŒÙ‡â€ŒÛŒ JSON Ù…ÛŒØ±Ù‡ØŒ Ù…Ø³ØªÙ‚ÛŒÙ… Ø±Ùˆ okhttp â€” Ø¨Ø§ reflection Ø®Ø§Ù„Øµ
+    // (Ø¨Ø¯ÙˆÙ† import Ù…Ø³ØªÙ‚ÛŒÙ… okhttp3/okioØŒ ØªØ§ NoClassDefFoundError Ù†Ø¯Ù‡)
 
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
@@ -32,24 +25,28 @@ public class MainHook implements IXposedHookLoadPackage {
 
         try {
             Class<?> requestBuilderClass = XposedHelpers.findClass("okhttp3.Request$Builder", lpparam.classLoader);
+            final Class<?> bufferClass = XposedHelpers.findClass("okio.Buffer", lpparam.classLoader);
 
             XposedHelpers.findAndHookMethod(requestBuilderClass, "build", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     try {
-                        Request request = (Request) param.getResult();
+                        Object request = param.getResult();
                         if (request == null) return;
 
-                        String url = request.url().toString();
-                        String method = request.method();
+                        // url() -> HttpUrl Ø¢Ø¨Ø¬Ú©ØªØ› ÙÙ‚Ø· toString ØµØ¯Ø§Ø´ Ù…ÛŒâ€ŒØ²Ù†ÛŒÙ…ØŒ Ù†ÛŒØ§Ø²ÛŒ Ø¨Ù‡ Ø´Ù†Ø§Ø®ØªÙ† ØªØ§ÛŒÙ¾Ø´ Ù†ÛŒØ³Øª
+                        Object urlObj = XposedHelpers.callMethod(request, "url");
+                        String url = String.valueOf(urlObj);
+
+                        String method = (String) XposedHelpers.callMethod(request, "method");
 
                         String bodyPreview = "(no body)";
-                        RequestBody body = request.body();
+                        Object body = XposedHelpers.callMethod(request, "body");
                         if (body != null) {
                             try {
-                                Buffer buffer = new Buffer();
-                                body.writeTo(buffer);
-                                String full = buffer.readUtf8();
+                                Object buffer = bufferClass.getConstructor().newInstance();
+                                XposedHelpers.callMethod(body, "writeTo", buffer);
+                                String full = (String) XposedHelpers.callMethod(buffer, "readUtf8");
                                 bodyPreview = full.length() > 300 ? full.substring(0, 300) + "...(truncated)" : full;
                             } catch (Throwable t) {
                                 bodyPreview = "(could not read body: " + t + ")";
