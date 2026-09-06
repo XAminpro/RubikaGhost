@@ -1,17 +1,25 @@
 package com.example.rubikaghost;
 
+import android.content.Context;
+
+import de.robv.android.xposed.AndroidAppHelper;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
+import java.io.File;
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "RubikaGhostLog";
-
-    // Ù†Ø³Ø®Ù‡â€ŒÛŒ ØªØ´Ø®ÛŒØµÛŒ: Ø²ÛŒØ± Ù„Ø§ÛŒÙ‡â€ŒÛŒ JSON Ù…ÛŒØ±Ù‡ØŒ Ù…Ø³ØªÙ‚ÛŒÙ… Ø±Ùˆ okhttp â€” Ø¨Ø§ reflection Ø®Ø§Ù„Øµ
-    // (Ø¨Ø¯ÙˆÙ† import Ù…Ø³ØªÙ‚ÛŒÙ… okhttp3/okioØŒ ØªØ§ NoClassDefFoundError Ù†Ø¯Ù‡)
+    private static File logFile;
 
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
@@ -24,6 +32,18 @@ public class MainHook implements IXposedHookLoadPackage {
         XposedBridge.log(TAG + ": Active -> " + lpparam.packageName);
 
         try {
+            Context ctx = AndroidAppHelper.currentApplication();
+            File dir = ctx.getExternalFilesDir(null); // Ù…Ø³ÛŒØ± Ù‡Ù…ÛŒØ´Ù‡ Ø¨Ø¯ÙˆÙ† Ù†ÛŒØ§Ø² Ø¨Ù‡ Ù¾Ø±Ù…ÛŒØ´Ù† Ù‚Ø§Ø¨Ù„â€ŒÙ†ÙˆØ´ØªÙ†Ù‡
+            if (dir == null) dir = ctx.getFilesDir(); // Ø§Ú¯Ù‡ Ø¨Ù‡ Ù‡Ø± Ø¯Ù„ÛŒÙ„ÛŒ null Ø¨ÙˆØ¯ØŒ Ø­Ø§ÙØ¸Ù‡â€ŒÛŒ Ø¯Ø§Ø®Ù„ÛŒ Ø®ÙˆØ¯Ù Ø±ÙˆØ¨ÛŒÚ©Ø§
+            logFile = new File(dir, "rubikaghost_log.txt");
+            writeLog("===== SESSION START =====");
+            writeLog("Log file path: " + logFile.getAbsolutePath());
+            XposedBridge.log(TAG + ": Writing logs to -> " + logFile.getAbsolutePath());
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": Could not set up log file: " + t);
+        }
+
+        try {
             Class<?> requestBuilderClass = XposedHelpers.findClass("okhttp3.Request$Builder", lpparam.classLoader);
             final Class<?> bufferClass = XposedHelpers.findClass("okio.Buffer", lpparam.classLoader);
 
@@ -34,10 +54,8 @@ public class MainHook implements IXposedHookLoadPackage {
                         Object request = param.getResult();
                         if (request == null) return;
 
-                        // url() -> HttpUrl Ø¢Ø¨Ø¬Ú©ØªØ› ÙÙ‚Ø· toString ØµØ¯Ø§Ø´ Ù…ÛŒâ€ŒØ²Ù†ÛŒÙ…ØŒ Ù†ÛŒØ§Ø²ÛŒ Ø¨Ù‡ Ø´Ù†Ø§Ø®ØªÙ† ØªØ§ÛŒÙ¾Ø´ Ù†ÛŒØ³Øª
                         Object urlObj = XposedHelpers.callMethod(request, "url");
                         String url = String.valueOf(urlObj);
-
                         String method = (String) XposedHelpers.callMethod(request, "method");
 
                         String bodyPreview = "(no body)";
@@ -47,22 +65,34 @@ public class MainHook implements IXposedHookLoadPackage {
                                 Object buffer = bufferClass.getConstructor().newInstance();
                                 XposedHelpers.callMethod(body, "writeTo", buffer);
                                 String full = (String) XposedHelpers.callMethod(buffer, "readUtf8");
-                                bodyPreview = full.length() > 300 ? full.substring(0, 300) + "...(truncated)" : full;
+                                bodyPreview = full.length() > 500 ? full.substring(0, 500) + "...(truncated)" : full;
                             } catch (Throwable t) {
                                 bodyPreview = "(could not read body: " + t + ")";
                             }
                         }
 
-                        XposedBridge.log(TAG + ": HTTP " + method + " " + url + " | body: " + bodyPreview);
+                        writeLog("HTTP " + method + " " + url + " | body: " + bodyPreview);
                     } catch (Throwable t) {
-                        XposedBridge.log(TAG + ": logging error: " + t);
+                        writeLog("logging error: " + t);
                     }
                 }
             });
 
-            XposedBridge.log(TAG + ": OkHttp Request.Builder.build() hooked successfully");
+            writeLog("OkHttp Request.Builder.build() hooked successfully");
+            XposedBridge.log(TAG + ": OkHttp hook active, writing to file");
         } catch (Throwable t) {
+            writeLog("Hook setup FAILED: " + t);
             XposedBridge.log(TAG + ": Hook setup FAILED: " + t);
+        }
+    }
+
+    private static synchronized void writeLog(String line) {
+        if (logFile == null) return;
+        try (PrintWriter pw = new PrintWriter(new FileWriter(logFile, true))) {
+            String time = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(new Date());
+            pw.println("[" + time + "] " + line);
+        } catch (Throwable ignored) {
+            // Ø§Ú¯Ù‡ Ù†ÙˆØ´ØªÙ† ØªÙˆ ÙØ§ÛŒÙ„ Ù‡Ù… Ø´Ú©Ø³Øª Ø®ÙˆØ±Ø¯ØŒ Ø¯ÛŒÚ¯Ù‡ Ú©Ø§Ø±ÛŒ Ù†Ù…ÛŒâ€ŒØªÙˆÙ†ÛŒÙ… Ø¨Ú©Ù†ÛŒÙ…Ø› Ø¨ÛŒâ€ŒØµØ¯Ø§ Ø±Ø¯ Ù…ÛŒØ´ÛŒÙ…
         }
     }
 }
