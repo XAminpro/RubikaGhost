@@ -2,7 +2,6 @@ package com.example.rubikaghost;
 
 import android.content.Context;
 
-import de.robv.android.xposed.AndroidAppHelper;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -32,9 +31,13 @@ public class MainHook implements IXposedHookLoadPackage {
         XposedBridge.log(TAG + ": Active -> " + lpparam.packageName);
 
         try {
-            Context ctx = AndroidAppHelper.currentApplication();
-            File dir = ctx.getExternalFilesDir(null); // Ù…Ø³ÛŒØ± Ù‡Ù…ÛŒØ´Ù‡ Ø¨Ø¯ÙˆÙ† Ù†ÛŒØ§Ø² Ø¨Ù‡ Ù¾Ø±Ù…ÛŒØ´Ù† Ù‚Ø§Ø¨Ù„â€ŒÙ†ÙˆØ´ØªÙ†Ù‡
-            if (dir == null) dir = ctx.getFilesDir(); // Ø§Ú¯Ù‡ Ø¨Ù‡ Ù‡Ø± Ø¯Ù„ÛŒÙ„ÛŒ null Ø¨ÙˆØ¯ØŒ Ø­Ø§ÙØ¸Ù‡â€ŒÛŒ Ø¯Ø§Ø®Ù„ÛŒ Ø®ÙˆØ¯Ù Ø±ÙˆØ¨ÛŒÚ©Ø§
+            // به‌جای AndroidAppHelper (که تو این نسخه‌ی api جار نیست)،
+            // مستقیم از android.app.ActivityThread.currentApplication() با reflection استفاده می‌کنیم
+            Class<?> activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", lpparam.classLoader);
+            Context ctx = (Context) XposedHelpers.callStaticMethod(activityThreadClass, "currentApplication");
+
+            File dir = ctx.getExternalFilesDir(null);
+            if (dir == null) dir = ctx.getFilesDir();
             logFile = new File(dir, "rubikaghost_log.txt");
             writeLog("===== SESSION START =====");
             writeLog("Log file path: " + logFile.getAbsolutePath());
@@ -92,7 +95,6 @@ public class MainHook implements IXposedHookLoadPackage {
             String time = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(new Date());
             pw.println("[" + time + "] " + line);
         } catch (Throwable ignored) {
-            // Ø§Ú¯Ù‡ Ù†ÙˆØ´ØªÙ† ØªÙˆ ÙØ§ÛŒÙ„ Ù‡Ù… Ø´Ú©Ø³Øª Ø®ÙˆØ±Ø¯ØŒ Ø¯ÛŒÚ¯Ù‡ Ú©Ø§Ø±ÛŒ Ù†Ù…ÛŒâ€ŒØªÙˆÙ†ÛŒÙ… Ø¨Ú©Ù†ÛŒÙ…Ø› Ø¨ÛŒâ€ŒØµØ¯Ø§ Ø±Ø¯ Ù…ÛŒØ´ÛŒÙ…
         }
     }
 }
